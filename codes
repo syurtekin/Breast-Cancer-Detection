@@ -1,0 +1,163 @@
+import numpy as np
+import pandas as pd
+import seaborn as sns
+import matplotlib.pyplot as plt
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import train_test_split
+from sklearn.model_selection import GridSearchCV
+from sklearn.preprocessing import StandardScaler
+from sklearn.svm import SVC
+from sklearn.decomposition import PCA
+from sklearn.metrics import classification_report , confusion_matrix
+import itertools
+import tensorflow as tf
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense,Activation
+
+#plotting for correlated and uncorrelated data sets
+def plotting_(malignant_1,benign_1,malignant_2,benign_2):
+    fig, ax = plt.subplots(1, 2, figsize=(8, 4))
+    
+    ax[0].scatter(malignant_1, malignant_2, color="white", edgecolors="red")
+    ax[1].scatter(benign_1, benign_2, color="white", edgecolors="blue")
+    
+    ax[0].set_title("Malignant")
+    ax[1].set_title("Benign")
+    ax[0].set_xlabel(malignant_1.name)
+    ax[1].set_xlabel(malignant_1.name)
+    ax[0].set_ylabel(malignant_2.name)
+    ax[1].set_ylabel(malignant_2.name)
+    plt.show()
+
+# Setting seed
+SEED = 1
+
+data = pd.read_csv('data.csv')
+#data has useless column so dropped it
+data.drop(['Unnamed: 32', 'id'], axis=1, inplace=True)
+
+data['diagnosis'] = data['diagnosis'].map({'M':1, 'B':0})
+data.T
+malignant = data[data['diagnosis']==1].reset_index(drop=True)
+benign = data[data['diagnosis']==0].reset_index(drop=True)
+
+#finding correlation matrix of data
+corr = data.corr()
+plt.figure(figsize = (8, 8))
+sns.heatmap(corr, xticklabels=corr.columns.values,yticklabels=corr.columns.values)
+
+#plotting correlated data sets
+plotting_(malignant['radius_mean'],benign['radius_mean'],malignant['perimeter_mean'],benign['perimeter_mean'])
+plotting_(malignant['radius_mean'],benign['radius_mean'],malignant['area_mean'],benign['area_mean'])
+plotting_(malignant['radius_mean'],benign['radius_mean'],malignant['perimeter_worst'],benign['perimeter_worst'])
+plotting_(malignant['radius_worst'],benign['radius_worst'],malignant['perimeter_worst'],benign['perimeter_worst'])
+
+#plotting uncorrelated data sets
+plotting_(malignant['radius_mean'],benign['radius_mean'],malignant['fractal_dimension_mean'],benign['fractal_dimension_mean'])
+plotting_(malignant['area_mean'],benign['area_mean'],malignant['fractal_dimension_mean'],benign['fractal_dimension_mean'])
+plotting_(malignant['smoothness_se'],benign['smoothness_se'],malignant['area_mean'],benign['area_mean'])
+plotting_(malignant['smoothness_se'],benign['smoothness_se'],malignant['perimeter_worst'],benign['perimeter_worst'])
+
+#preparing dataframes for pca
+pca_target = pd.DataFrame(data['diagnosis'])
+pca_data = data.drop('diagnosis', axis=1)
+
+#Data Normalizing for Principal Component Analysis
+pca_x = pca_data.values
+std_x = StandardScaler().fit_transform(pca_x)
+
+find_pca = PCA(svd_solver='full')
+pca_std = find_pca.fit(std_x, pca_target).transform(std_x)
+
+pca_std = pd.DataFrame(pca_std)
+pca_std = pca_std.merge(pca_target, left_index = True, right_index = True, how = 'left')
+pca_std['diagnosis'] = pca_std['diagnosis'].replace({1:'M',0:'B'})
+
+#as first 6 component has %88.76
+pca_var = pd.DataFrame(find_pca.explained_variance_ratio_)
+pca_var.rename(columns={0:'Percentage of Component'},inplace=True)
+pca_var.index = data.columns[1:]
+pca_var.plot.bar(subplots=True, figsize = (10,5))
+
+
+#Model-1 (Logistic Regression)
+X = data.drop('diagnosis',axis=1).values
+y = data['diagnosis'].values
+
+#split data for training and testing model
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=1)
+
+
+log_clf = LogisticRegression(random_state = 1)
+penalty = ['none', 'l1', 'l2', 'elasticnet']
+C = [0.0001,0.001,0.01,0.1,1,10,100,1000,10000]
+param_grid = dict(C=C, penalty=penalty)
+
+log_clf_cv = GridSearchCV(estimator = log_clf, param_grid = param_grid , scoring = 'accuracy', verbose = 1, n_jobs = -1)
+log_clf_cv.fit(X_train, y_train)
+
+print('The best parameters for using this model is', log_clf_cv.best_params_)
+
+log_clf_cv = LogisticRegression(C = log_clf_cv.best_params_['C'], 
+                                penalty = log_clf_cv.best_params_['penalty'], 
+                                random_state = 1,
+                                solver='lbfgs', max_iter=1000000)
+
+log_clf_cv.fit(X_train, y_train)
+y_pred = log_clf_cv.predict(X_test)
+y_score = log_clf_cv.decision_function(X_test)
+
+
+print(classification_report(y_test,y_pred))
+
+#Model-2 (Support Vector Machine)
+model_svc = SVC()
+model_svc.fit(X_train,y_train)
+
+y_pred = model_svc.predict(X_test)
+
+print(classification_report(y_test,y_pred))
+
+#Model-3 (Sequantial in TSF)
+model = Sequential()
+
+model.add(Dense(30,activation='relu'))
+model.add(Dense(20,activation='relu'))
+#we need to 0 and 1 in y so we used sigmoid activation
+model.add(Dense(1,activation='sigmoid'))
+
+#optimizer: adagrad, rmsprop (low accuracy)
+#loss: categorical_crossentropy and mean_squared_error (low accuracy)
+model.compile(loss='binary_crossentropy',optimizer='adam',metrics=['accuracy'])
+
+model.fit(x=X_train,y = y_train, epochs=500, validation_data = (X_test,y_test),verbose=1 )
+
+losses = pd.DataFrame(model.history.history)
+predictions = model.predict_classes(X_test)
+print(classification_report(y_test,predictions))
+
+#Model-3 with the components in PCA is greater than 2% (Sequantial in TSF)
+model = Sequential()
+
+model.add(Dense(30,activation='relu'))
+model.add(Dense(20,activation='relu'))
+#we need to 0 and 1 in y so we used sigmoid activation
+model.add(Dense(1,activation='sigmoid'))
+
+#optimizer: adagrad, rmsprop (low accuracy)
+#loss: categorical_crossentropy and mean_squared_error (low accuracy)
+model.compile(loss='binary_crossentropy',optimizer='adam',metrics=['accuracy'])
+
+X = data[pca_var[pca_var['Percentage of Component']>0.02].index].values
+y = data['diagnosis'].values
+
+#split data for training and testing model
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=1)
+
+model.fit(x=X_train,y = y_train, epochs=500, validation_data = (X_test,y_test),verbose=1 )
+
+losses = pd.DataFrame(model.history.history)
+predictions = model.predict_classes(X_test)
+print(classification_report(y_test,predictions))
+
+
